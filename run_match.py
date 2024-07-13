@@ -7,7 +7,7 @@ from rlbot.managers import MatchManager
 CURRENT_FILE = Path(__file__).parent
 
 MATCH_CONFIG_PATH = CURRENT_FILE / "minimal.toml"
-RLBOT_SERVER_FOLDER = Path("C:\\Users\\ddthj\\Documents\\Repositories\\RLBotCS\\RLBotCS\\bin\\Release\\net8.0")
+RLBOT_SERVER_FOLDER = CURRENT_FILE / "RLBotServer.exe"
 
 
 if __name__ == "__main__":
