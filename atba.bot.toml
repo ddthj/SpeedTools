@@ -2,7 +2,7 @@
 # The name that will be displayed in game
 name = "TestBotPlsIgnore"
 # Path to loadout config from runner
-looks_config = ".\\looks.toml"
+looks_config = ".\\loadout_config.toml"
 # (OPTIONAL) - what you want the working directory set to
 # This is relative to the location of this file
 location = ""
