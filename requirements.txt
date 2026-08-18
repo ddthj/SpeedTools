@@ -1,2 +1,6 @@
-# rlbot==5.*
-rlbot @ git+https://github.com/VirxEC/python-interface@master
+rlbot>=2.0.0.beta
+numpy~=2.4.2
+casadi~=3.7.2
+scipy~=1.17.0
+dataclasses~=0.6
+matplotlib~=3.11.1
