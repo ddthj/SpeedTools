@@ -76,7 +76,8 @@ def _solve_single_branch(q0, w0, q_target_signed, N, tol_angle, tol_speed, extra
         "ipopt.tol": 1e-4,
         "ipopt.acceptable_tol": 1e-3,
         "ipopt.acceptable_iter": 5,
-        "print_time": False
+        "print_time": False,
+        "ipopt.hessian_approximation": "limited-memory",
     }
     opti.solver("ipopt", opts)
 
@@ -90,7 +91,7 @@ def _solve_single_branch(q0, w0, q_target_signed, N, tol_angle, tol_speed, extra
             return float("inf"), None
 
 
-def solve_casadi(q0, w0, target_rot, tol_angle=0.05, tol_speed=0.07, N=35):
+def solve_casadi(q0, w0, target_rot, tol_angle=0.05, tol_speed=0.07, N=30):
     """
     Main entry point for CasADi solver.
     Evaluates direct and +360-deg coasting branches and returns (Tf, 120 FPS history).

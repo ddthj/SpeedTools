@@ -2,6 +2,7 @@
 main.py - Solver-agnostic benchmark orchestrator and multi-viewport visualizer.
 """
 import os
+import time
 import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.animation import FuncAnimation, PillowWriter
@@ -13,17 +14,12 @@ from solver_kinematic import solve_kinematic
 from solver_penguin import solve_penguin
 
 # ─── Configuration ────────────────────────────────────────────────────────────
-N_SAMPLES = 25
-
-# Settle tolerances
-TOL_ANGLE = 0.05       # ~2.86 degrees
-TOL_SPEED = 0.07       # rad/s
-
-# GIF Output Settings
+N_SAMPLES = 5
+TOL_ANGLE = 0.05
+TOL_SPEED = 0.07
 OUTPUT_DIR = "renders"
-SAVE_ALL_GIFS = True    # Generates and saves a GIF for every attempt
+SAVE_ALL_GIFS = True
 
-# Register any arbitrary set of solvers (Agnostic)
 ACTIVE_SOLVERS = {
     "CasADi": {"fn": solve_casadi,    "color": "#00D2FF"},
     "RM_Kinematic":     {"fn": solve_kinematic, "color": "#FF7B00"},
@@ -188,6 +184,7 @@ def main():
 
     target_rot = np.array([0., 0., 0., 1.])
     completion_times = {name: [] for name in ACTIVE_SOLVERS}
+    compute_times    = {name: [] for name in ACTIVE_SOLVERS}   # ← new
 
     print(f"==========================================================================")
     print(f"Running Multi-Solver Benchmark ({N_SAMPLES} Runs @ 120 FPS)")
@@ -207,10 +204,16 @@ def main():
         histories = {}
         run_times = {}
 
-        # 1. Run all registered solvers
+        # 1. Run all registered solvers (with wall-clock timing)
         for name, config in ACTIVE_SOLVERS.items():
-            t_finish, hist = config["fn"](q0, w0, target_rot, tol_angle=TOL_ANGLE, tol_speed=TOL_SPEED)
+            t_wall_start = time.perf_counter()          # ← new
+            t_finish, hist = config["fn"](q0, w0, target_rot,
+                                          tol_angle=TOL_ANGLE,
+                                          tol_speed=TOL_SPEED)
+            t_wall_end = time.perf_counter()            # ← new
+
             completion_times[name].append(t_finish)
+            compute_times[name].append(t_wall_end - t_wall_start)   # ← new
             run_times[name] = t_finish
             histories[name] = {
                 "hist": hist,
@@ -231,14 +234,13 @@ def main():
             gif_path = os.path.join(OUTPUT_DIR, f"run_{i+1:03d}.gif")
             render_comparison_animation(histories, filename=gif_path)
 
-    # ─── Agnostic Summary Statistics ──────────────────────────────────────────
+    # ─── Solution Quality Summary ────────────────────────────────
     print("\n" + "=" * 75)
     print(f"                       BENCHMARK SUMMARY (N = {N_SAMPLES})")
     print("=" * 75)
     print(f"{'Solver':<22} | {'Mean Time':<10} | {'Median Time':<12} | {'Min Time':<10} | {'Max Time':<10}")
     print("-" * 75)
 
-    # Sort solvers by mean completion time (fastest first)
     ranked_solvers = sorted(ACTIVE_SOLVERS.keys(), key=lambda n: np.mean(completion_times[n]))
     for rank, name in enumerate(ranked_solvers, 1):
         times = completion_times[name]
@@ -254,8 +256,41 @@ def main():
                 if np.mean(diff_frames) > 0:
                     print(f"  • {s1} is faster than {s2} by {np.mean(diff_frames):>+5.1f} frames avg (+{np.mean(diff_frames)/SIM_FPS:.4f} s)")
     print("=" * 75)
+
+    # ─── Computation Time Summary ──────────────────────────────────────
+    print("\n" + "=" * 75)
+    print(f"              SOLVER COMPUTATION TIME (wall-clock, N = {N_SAMPLES})")
+    print("=" * 75)
+    print(f"{'Rank':<5} {'Solver':<22} | {'Mean':<10} | {'Median':<10} | {'Min':<10} | {'Max':<10} | {'P95':<10}")
+    print("-" * 75)
+
+    ranked_compute = sorted(ACTIVE_SOLVERS.keys(), key=lambda n: np.mean(compute_times[n]))
+    for rank, name in enumerate(ranked_compute, 1):
+        ct = compute_times[name]
+        p95 = np.percentile(ct, 95)
+        print(f"#{rank:<4} {name:<22} | {np.mean(ct):>7.4f} s | {np.median(ct):>8.4f} s | {np.min(ct):>8.4f} s | {np.max(ct):>8.4f} s | {p95:>8.4f} s")
+    print("-" * 75)
+
+    # Composite score: normalise each solver's mean solution time and mean compute time
+    # to [0, 1] across solvers, then average.  Lower is better.
+    mean_sol  = np.array([np.mean(completion_times[n]) for n in ACTIVE_SOLVERS])
+    mean_comp = np.array([np.mean(compute_times[n])    for n in ACTIVE_SOLVERS])
+
+    sol_norm  = (mean_sol  - mean_sol.min())  / max(mean_sol.max()  - mean_sol.min(),  1e-12)
+    comp_norm = (mean_comp - mean_comp.min()) / max(mean_comp.max() - mean_comp.min(), 1e-12)
+    score = 0.5 * sol_norm + 0.5 * comp_norm
+    score_map = dict(zip(solver_names, score))
+
+    print(f"\nComposite Score (0 = best, 1 = worst;  50 % solution time + 50 % compute time):")
+    ranked_score = sorted(solver_names, key=score_map.__getitem__)
+    for rank, name in enumerate(ranked_score, 1):
+        bar = "█" * int(score_map[name] * 30) + "░" * (30 - int(score_map[name] * 30))
+        print(f"  #{rank}  {name:<18}  {score_map[name]:.4f}  {bar}")
+    print("=" * 75)
+
     if SAVE_ALL_GIFS:
         print(f"All {N_SAMPLES} comparison GIFs saved to '{os.path.abspath(OUTPUT_DIR)}/'.")
+
 
 
 if __name__ == "__main__":
