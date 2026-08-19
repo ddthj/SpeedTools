@@ -33,12 +33,12 @@ def _solve_single_branch(q0, w0, q_target_signed, N, tol_angle, tol_speed, extra
             q_base = slerp(q0, -q_target_signed, ratio)
             qk = qmul(q_spin, q_base)
             X_init[0:4, k] = qk / np.linalg.norm(qk)
-            X_init[4:7, k] = (1.0 - ratio**2) * w0
+            X_init[4:7, k] = (1.0 - ratio ** 2) * w0
 
     opti = ca.Opti()
     Tf = opti.variable()
-    X  = opti.variable(7, N + 1)
-    U  = opti.variable(3, N)
+    X = opti.variable(7, N + 1)
+    U = opti.variable(3, N)
 
     dt = Tf / N
     opti.minimize(Tf + 1e-3 * ca.sumsqr(U) * dt)
@@ -49,12 +49,12 @@ def _solve_single_branch(q0, w0, q_target_signed, N, tol_angle, tol_speed, extra
     # Terminal tolerances
     min_dot = float(cos(tol_angle / 2.0))
     opti.subject_to(ca.dot(X[0:4, -1], q_target_signed) >= min_dot)
-    opti.subject_to(ca.sumsqr(X[4:7, -1]) <= tol_speed**2)
+    opti.subject_to(ca.sumsqr(X[4:7, -1]) <= tol_speed ** 2)
 
     for k in range(N):
         x_k, u_k = X[:, k], U[:, k]
         opti.subject_to(opti.bounded(-1.0, u_k, 1.0))
-        opti.subject_to(ca.sumsqr(x_k[4:7]) <= MAX_ANG_SPEED**2)
+        opti.subject_to(ca.sumsqr(x_k[4:7]) <= MAX_ANG_SPEED ** 2)
 
         def f_rk(x, u):
             dq, dw = vehicle_dynamics(x[0:4], x[4:7], u)
@@ -78,6 +78,7 @@ def _solve_single_branch(q0, w0, q_target_signed, N, tol_angle, tol_speed, extra
         "ipopt.acceptable_iter": 5,
         "print_time": False,
         "ipopt.hessian_approximation": "limited-memory",
+        "ipopt.mu_strategy": "adaptive",
     }
     opti.solver("ipopt", opts)
 
@@ -97,7 +98,7 @@ def solve_casadi(q0, w0, target_rot, tol_angle=0.05, tol_speed=0.07, N=30):
     Evaluates direct and +360-deg coasting branches and returns (Tf, 120 FPS history).
     """
     q_tgt_direct = target_rot.copy() if np.dot(q0, target_rot) >= 0 else -target_rot.copy()
-    q_tgt_extra  = -q_tgt_direct
+    q_tgt_extra = -q_tgt_direct
 
     best_Tf = float("inf")
     best_U = None
@@ -122,7 +123,8 @@ def solve_casadi(q0, w0, target_rot, tol_angle=0.05, tol_speed=0.07, N=30):
     for tick in range(num_ticks + 25):
         sim_time = tick * SIM_DT
         k = min(N - 1, int(sim_time / dt_ctrl))
-        u_cmd = np.array([float(best_U[0, k]), float(best_U[1, k]), float(best_U[2, k])]) if tick < num_ticks else np.zeros(3)
+        u_cmd = np.array(
+            [float(best_U[0, k]), float(best_U[1, k]), float(best_U[2, k])]) if tick < num_ticks else np.zeros(3)
 
         inner = min(1.0, max(-1.0, abs(float(np.dot(car.rot, target_rot)))))
         angle_rad = 2.0 * np.arccos(inner)
