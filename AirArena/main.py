@@ -3,6 +3,7 @@ main.py - Solver-agnostic benchmark orchestrator and multi-viewport visualizer.
 """
 import os
 import time
+import pickle
 import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.animation import FuncAnimation, PillowWriter
@@ -12,36 +13,39 @@ from simulator import random_state, qrot, SIM_FPS
 from solver_casadi import solve_casadi
 from solver_kinematic import solve_kinematic
 from solver_penguin import solve_penguin
+from solver_roundy import solve_roundy
 
 # ─── Configuration ────────────────────────────────────────────────────────────
-N_SAMPLES = 5
+N_SAMPLES = 100
 TOL_ANGLE = 0.05
 TOL_SPEED = 0.07
 OUTPUT_DIR = "renders"
 SAVE_ALL_GIFS = True
+CACHE_FILE = "benchmark_cache.pkl"
 
 ACTIVE_SOLVERS = {
-    "CasADi": {"fn": solve_casadi,    "color": "#00D2FF"},
-    "RM_Kinematic":     {"fn": solve_kinematic, "color": "#FF7B00"},
-    "PenguinBot":     {"fn": solve_penguin,  "color": "#B05CFF"},
+    "CasADi": {"fn": solve_casadi, "color": "#00D2FF"},
+    "Roundy": {"fn": solve_roundy, "color": "#66fc25"},
+    "RM_Kinematic": {"fn": solve_kinematic, "color": "#FF7B00"},
+    "PenguinBot": {"fn": solve_penguin, "color": "#B05CFF"},
 }
 
 # 3D Chassis wireframe edges
 CAR_LOCAL_EDGES = [
-    (np.array([ 1.0,  0.5, -0.25]), np.array([ 1.0, -0.5, -0.25])),
-    (np.array([ 1.0, -0.5, -0.25]), np.array([-1.0, -0.5, -0.25])),
-    (np.array([-1.0, -0.5, -0.25]), np.array([-1.0,  0.5, -0.25])),
-    (np.array([-1.0,  0.5, -0.25]), np.array([ 1.0,  0.5, -0.25])),
-    (np.array([ 0.3,  0.35, 0.35]), np.array([ 0.3, -0.35, 0.35])),
-    (np.array([ 0.3, -0.35, 0.35]), np.array([-0.6, -0.35, 0.35])),
-    (np.array([-0.6, -0.35, 0.35]), np.array([-0.6,  0.35, 0.35])),
-    (np.array([-0.6,  0.35, 0.35]), np.array([ 0.3,  0.35, 0.35])),
-    (np.array([ 1.0,  0.5, -0.25]), np.array([ 0.3,  0.35, 0.35])),
-    (np.array([ 1.0, -0.5, -0.25]), np.array([ 0.3, -0.35, 0.35])),
+    (np.array([1.0, 0.5, -0.25]), np.array([1.0, -0.5, -0.25])),
+    (np.array([1.0, -0.5, -0.25]), np.array([-1.0, -0.5, -0.25])),
+    (np.array([-1.0, -0.5, -0.25]), np.array([-1.0, 0.5, -0.25])),
+    (np.array([-1.0, 0.5, -0.25]), np.array([1.0, 0.5, -0.25])),
+    (np.array([0.3, 0.35, 0.35]), np.array([0.3, -0.35, 0.35])),
+    (np.array([0.3, -0.35, 0.35]), np.array([-0.6, -0.35, 0.35])),
+    (np.array([-0.6, -0.35, 0.35]), np.array([-0.6, 0.35, 0.35])),
+    (np.array([-0.6, 0.35, 0.35]), np.array([0.3, 0.35, 0.35])),
+    (np.array([1.0, 0.5, -0.25]), np.array([0.3, 0.35, 0.35])),
+    (np.array([1.0, -0.5, -0.25]), np.array([0.3, -0.35, 0.35])),
     (np.array([-1.0, -0.5, -0.25]), np.array([-0.6, -0.35, 0.35])),
-    (np.array([-1.0,  0.5, -0.25]), np.array([-0.6,  0.35, 0.35])),
-    (np.array([ 1.0,  0.5, -0.25]), np.array([ 1.3,  0.0, -0.1])),
-    (np.array([ 1.0, -0.5, -0.25]), np.array([ 1.3,  0.0, -0.1])),
+    (np.array([-1.0, 0.5, -0.25]), np.array([-0.6, 0.35, 0.35])),
+    (np.array([1.0, 0.5, -0.25]), np.array([1.3, 0.0, -0.1])),
+    (np.array([1.0, -0.5, -0.25]), np.array([1.3, 0.0, -0.1])),
 ]
 
 
@@ -95,7 +99,8 @@ def render_comparison_animation(results_dict, filename):
             spine.set_color("#444444")
 
     # Static tolerance limits on 2D plots
-    ax_err.axhline(TOL_ANGLE * (180.0 / pi), color="#FF3366", linestyle=":", lw=1.2, label=f"Tol ({TOL_ANGLE*(180/pi):.1f}°)")
+    ax_err.axhline(TOL_ANGLE * (180.0 / pi), color="#FF3366", linestyle=":", lw=1.2,
+                   label=f"Tol ({TOL_ANGLE * (180 / pi):.1f}°)")
     ax_spd.axhline(TOL_SPEED, color="#FF3366", linestyle=":", lw=1.2, label=f"Tol ({TOL_SPEED:.2f} r/s)")
 
     # Plot full static curves & mark exact settle points
@@ -152,14 +157,15 @@ def render_comparison_animation(results_dict, filename):
         # Local Axes (Red=Nose, Green=Right, Blue=Roof)
         fwd = qrot(rot, np.array([1.3, 0.0, 0.0]))
         rgt = qrot(rot, np.array([0.0, 0.7, 0.0]))
-        up  = qrot(rot, np.array([0.0, 0.0, 0.7]))
+        up = qrot(rot, np.array([0.0, 0.0, 0.7]))
 
         ax.plot([0, fwd[0]], [0, fwd[1]], [0, fwd[2]], color="#FF2255", lw=2.2)
         ax.plot([0, rgt[0]], [0, rgt[1]], [0, rgt[2]], color="#00FF66", lw=1.8)
-        ax.plot([0, up[0]],  [0, up[1]],  [0, up[2]],  color="#3388FF", lw=1.8)
+        ax.plot([0, up[0]], [0, up[1]], [0, up[2]], color="#3388FF", lw=1.8)
 
         status_str = f"SETTLED ({t_settle:.3f}s)" if status == "SETTLED" else "ACTIVE"
-        ax.text2D(0.05, 0.92, f"{title}\n[{status_str}]", transform=ax.transAxes, color=color, fontsize=10, weight="bold")
+        ax.text2D(0.05, 0.92, f"{title}\n[{status_str}]", transform=ax.transAxes, color=color, fontsize=10,
+                  weight="bold")
 
     max_frames = max(len(results_dict[name]["hist"]) for name in solvers)
     stride = 4  # 120 FPS -> 30 FPS animation
@@ -177,6 +183,36 @@ def render_comparison_animation(results_dict, filename):
     plt.close(fig)
 
 
+# ─── Cache Helpers ────────────────────────────────────────────────────────────
+def _cache_is_valid(cache: dict) -> bool:
+    """Return True if the cached metadata matches the current configuration."""
+    meta = cache.get("meta")
+    if meta is None:
+        return False
+    return (
+            meta.get("n_samples") == N_SAMPLES
+            and meta.get("tol_angle") == TOL_ANGLE
+            and meta.get("tol_speed") == TOL_SPEED
+            and meta.get("solvers") == list(ACTIVE_SOLVERS.keys())
+    )
+
+
+def _save_cache(cache_path: str, cache_data: dict) -> None:
+    with open(cache_path, "wb") as f:
+        pickle.dump(cache_data, f, protocol=pickle.HIGHEST_PROTOCOL)
+
+
+def _load_cache(cache_path: str) -> dict:
+    if not os.path.exists(cache_path):
+        return {}
+    try:
+        with open(cache_path, "rb") as f:
+            return pickle.load(f)
+    except (pickle.UnpicklingError, EOFError, OSError) as exc:
+        print(f"[cache] Could not load '{cache_path}' ({exc}). Starting fresh.")
+        return {}
+
+
 # ─── Main Benchmark Loop ───────────────────────────────────────────────────────
 def main():
     if SAVE_ALL_GIFS:
@@ -184,7 +220,22 @@ def main():
 
     target_rot = np.array([0., 0., 0., 1.])
     completion_times = {name: [] for name in ACTIVE_SOLVERS}
-    compute_times    = {name: [] for name in ACTIVE_SOLVERS}   # ← new
+    compute_times    = {name: [] for name in ACTIVE_SOLVERS}
+
+    # ← cache: load & validate
+    cache = _load_cache(CACHE_FILE)
+    if cache and not _cache_is_valid(cache):
+        print("[cache] Configuration changed – cache invalidated, starting fresh.")
+        cache = {}
+    cache.setdefault("meta", {
+        "seed": _SEED, "n_samples": N_SAMPLES,
+        "tol_angle": TOL_ANGLE, "tol_speed": TOL_SPEED,
+        "solvers": list(ACTIVE_SOLVERS.keys()),
+    })
+    cache.setdefault("runs", {})
+    n_cached = len(cache["runs"])
+    if n_cached:
+        print(f"[cache] Loaded {n_cached}/{N_SAMPLES} cached runs from '{CACHE_FILE}'.")
 
     print(f"==========================================================================")
     print(f"Running Multi-Solver Benchmark ({N_SAMPLES} Runs @ 120 FPS)")
@@ -200,20 +251,44 @@ def main():
     print("-" * len(header))
 
     for i in range(N_SAMPLES):
+        # ← cache: skip if this run is already fully cached
+        cached_run = cache["runs"].get(i)
+        if cached_run and all(name in cached_run["results"] for name in ACTIVE_SOLVERS):
+            q0, w0 = cached_run["q0"], cached_run["w0"]
+            histories = {}
+            run_times = {}
+            for name in ACTIVE_SOLVERS:
+                r = cached_run["results"][name]
+                completion_times[name].append(r["t_finish"])
+                compute_times[name].append(r["compute_time"])
+                run_times[name] = r["t_finish"]
+                histories[name] = {"hist": r["hist"], "color": ACTIVE_SOLVERS[name]["color"], "t_settle": r["t_finish"]}
+
+            fastest_solver = min(run_times, key=run_times.get)
+            sorted_times = sorted(run_times.values())
+            lead = sorted_times[1] - sorted_times[0] if len(sorted_times) > 1 else 0.0
+            times_str = " | ".join([f"{run_times[n]:>{col_width-2}.4f} s" for n in solver_names])
+            print(f"{i+1:<5} | {times_str} | {fastest_solver} (+{lead*SIM_FPS:.1f}f)  [cached]")
+
+            if SAVE_ALL_GIFS:
+                gif_path = os.path.join(OUTPUT_DIR, f"run_{i+1:03d}.gif")
+                render_comparison_animation(histories, filename=gif_path)
+            continue
+
+        # ← not cached: run fresh
         q0, w0 = random_state()
         histories = {}
         run_times = {}
 
-        # 1. Run all registered solvers (with wall-clock timing)
         for name, config in ACTIVE_SOLVERS.items():
-            t_wall_start = time.perf_counter()          # ← new
+            t_wall_start = time.perf_counter()
             t_finish, hist = config["fn"](q0, w0, target_rot,
                                           tol_angle=TOL_ANGLE,
                                           tol_speed=TOL_SPEED)
-            t_wall_end = time.perf_counter()            # ← new
+            t_wall_end = time.perf_counter()
 
             completion_times[name].append(t_finish)
-            compute_times[name].append(t_wall_end - t_wall_start)   # ← new
+            compute_times[name].append(t_wall_end - t_wall_start)
             run_times[name] = t_finish
             histories[name] = {
                 "hist": hist,
@@ -221,15 +296,27 @@ def main():
                 "t_settle": t_finish
             }
 
-        # Determine fastest solver for this run
+        # ← cache: store this run
+        cache["runs"][i] = {
+            "q0": q0,
+            "w0": w0,
+            "results": {
+                name: {
+                    "t_finish": run_times[name],
+                    "hist": histories[name]["hist"],
+                    "compute_time": compute_times[name][-1],
+                }
+                for name in ACTIVE_SOLVERS
+            },
+        }
+        _save_cache(CACHE_FILE, cache)
+
         fastest_solver = min(run_times, key=run_times.get)
         sorted_times = sorted(run_times.values())
         lead = sorted_times[1] - sorted_times[0] if len(sorted_times) > 1 else 0.0
-
         times_str = " | ".join([f"{run_times[n]:>{col_width-2}.4f} s" for n in solver_names])
         print(f"{i+1:<5} | {times_str} | {fastest_solver} (+{lead*SIM_FPS:.1f}f)")
 
-        # 2. Render and save GIF for this run
         if SAVE_ALL_GIFS:
             gif_path = os.path.join(OUTPUT_DIR, f"run_{i+1:03d}.gif")
             render_comparison_animation(histories, filename=gif_path)
@@ -244,7 +331,8 @@ def main():
     ranked_solvers = sorted(ACTIVE_SOLVERS.keys(), key=lambda n: np.mean(completion_times[n]))
     for rank, name in enumerate(ranked_solvers, 1):
         times = completion_times[name]
-        print(f"#{rank} {name:<19} | {np.mean(times):>8.4f} s | {np.median(times):>10.4f} s | {np.min(times):>8.4f} s | {np.max(times):>8.4f} s")
+        print(
+            f"#{rank} {name:<19} | {np.mean(times):>8.4f} s | {np.median(times):>10.4f} s | {np.min(times):>8.4f} s | {np.max(times):>8.4f} s")
     print("-" * 75)
 
     # Pairwise lead matrix
@@ -254,7 +342,8 @@ def main():
             if s1 != s2:
                 diff_frames = (np.array(completion_times[s2]) - np.array(completion_times[s1])) * SIM_FPS
                 if np.mean(diff_frames) > 0:
-                    print(f"  • {s1} is faster than {s2} by {np.mean(diff_frames):>+5.1f} frames avg (+{np.mean(diff_frames)/SIM_FPS:.4f} s)")
+                    print(
+                        f"  • {s1} is faster than {s2} by {np.mean(diff_frames):>+5.1f} frames avg (+{np.mean(diff_frames) / SIM_FPS:.4f} s)")
     print("=" * 75)
 
     # ─── Computation Time Summary ──────────────────────────────────────
@@ -268,15 +357,16 @@ def main():
     for rank, name in enumerate(ranked_compute, 1):
         ct = compute_times[name]
         p95 = np.percentile(ct, 95)
-        print(f"#{rank:<4} {name:<22} | {np.mean(ct):>7.4f} s | {np.median(ct):>8.4f} s | {np.min(ct):>8.4f} s | {np.max(ct):>8.4f} s | {p95:>8.4f} s")
+        print(
+            f"#{rank:<4} {name:<22} | {np.mean(ct):>7.4f} s | {np.median(ct):>8.4f} s | {np.min(ct):>8.4f} s | {np.max(ct):>8.4f} s | {p95:>8.4f} s")
     print("-" * 75)
 
     # Composite score: normalise each solver's mean solution time and mean compute time
     # to [0, 1] across solvers, then average.  Lower is better.
-    mean_sol  = np.array([np.mean(completion_times[n]) for n in ACTIVE_SOLVERS])
-    mean_comp = np.array([np.mean(compute_times[n])    for n in ACTIVE_SOLVERS])
+    mean_sol = np.array([np.mean(completion_times[n]) for n in ACTIVE_SOLVERS])
+    mean_comp = np.array([np.mean(compute_times[n]) for n in ACTIVE_SOLVERS])
 
-    sol_norm  = (mean_sol  - mean_sol.min())  / max(mean_sol.max()  - mean_sol.min(),  1e-12)
+    sol_norm = (mean_sol - mean_sol.min()) / max(mean_sol.max() - mean_sol.min(), 1e-12)
     comp_norm = (mean_comp - mean_comp.min()) / max(mean_comp.max() - mean_comp.min(), 1e-12)
     score = 0.5 * sol_norm + 0.5 * comp_norm
     score_map = dict(zip(solver_names, score))
@@ -290,7 +380,6 @@ def main():
 
     if SAVE_ALL_GIFS:
         print(f"All {N_SAMPLES} comparison GIFs saved to '{os.path.abspath(OUTPUT_DIR)}/'.")
-
 
 
 if __name__ == "__main__":
