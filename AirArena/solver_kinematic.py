@@ -2,7 +2,7 @@
 solver_kinematic.py - Port of RM_Kinematic controller from Methods.cpp.
 """
 import numpy as np
-from math import pi, sin, sqrt
+from math import pi, sqrt
 from simulator import (
     MAX_ANG_SPEED, TORQUE, DAMPING, TORQUE_APPLY_SCALE, BASIS_QUAT,
     qmul, qrot, Car, CarControls, SIM_FPS, SIM_DT
@@ -55,6 +55,8 @@ def run_rm_kinematic(car: Car, target_rot):
 
 
 def solve_kinematic(q0, w0, target_rot, tol_angle=0.05, tol_speed=0.07, max_seconds=6.0):
+    # This controller accepts a starting state and tests to see how long it takes for the model to reach the desired
+    # Tolerances. Every solution has its own controller but they are largely the same
     car = Car(rot=q0.copy(), ang_vel=w0.copy())
     hist = []
     max_ticks = int(max_seconds * SIM_FPS)

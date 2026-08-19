@@ -1,98 +1,127 @@
+"""
+solver_roundy.py - Fast 3D time-optimal controller with discrete boundary layer settling.
+"""
+from math import pi, sqrt
 import numpy as np
-from math import pi, sqrt, atan2
 from simulator import (
-    MAX_ANG_SPEED, TORQUE, DAMPING, TORQUE_APPLY_SCALE,
-    BASIS_QUAT, qmul, qrot, Car, CarControls, SIM_FPS, SIM_DT
+    MAX_ANG_SPEED, TORQUE, DAMPING, TORQUE_APPLY_SCALE, BASIS_QUAT,
+    qmul, qrot, Car, CarControls, SIM_FPS, SIM_DT
 )
 
 
-def _kinematic_solve_1d(error, velocity, torque, damping):
-    eff_accel = (torque + damping * abs(velocity)) * TORQUE_APPLY_SCALE
-    stopping_dist = (velocity * abs(velocity)) / (2.0 * eff_accel)
-    future_error = (error - stopping_dist + pi) % (2.0 * pi) - pi
-    gain = 1.0 / (eff_accel * SIM_DT * SIM_DT)
-    return float(np.clip(future_error * gain, -1.0, 1.0))
+def _get_control_frame(car_rot, target_rot, car_ang_vel):
+    """Transforms orientation error and angular velocity into the control basis frame."""
+    dir_curr = qmul(car_rot, BASIS_QUAT)
+    dir_tgt = qmul(target_rot, BASIS_QUAT)
+    inv_curr = np.array([-dir_curr[0], -dir_curr[1], -dir_curr[2], dir_curr[3]])
+
+    # Relative rotation in control frame
+    q_rel = qmul(inv_curr, dir_tgt)
+    if q_rel[3] < 0:
+        q_rel = -q_rel
+
+    # Local angular velocity in control frame
+    local_ang_vel = qrot(inv_curr, car_ang_vel)
+    return q_rel, local_ang_vel
 
 
-def _geodesic_error(car_rot, target_rot):
-    """Return (unit_axis, angle) for the shortest arc from car_rot to target_rot."""
-    d = qmul(np.array([-car_rot[0], -car_rot[1], -car_rot[2], car_rot[3]]), target_rot)
-    if d[3] < 0:
-        d = -d
-    v = d[:3]
-    s = np.linalg.norm(v)
-    if s < 1e-9:
-        return np.array([0.0, 0.0, 1.0]), 0.0
-    angle = 2.0 * atan2(s, d[3])
-    return v / s, angle  # axis in world/inertial frame
-
-
-def _body_torque_limit_along(axis_body):
+def _smooth_bang_coast_brake(err, vel, torque, damping, v_max):
     """
-    Given a unit direction in the BODY frame, what's the max |torque| we can
-    produce along that direction, respecting per-axis saturation?
-
-    If we want torque τ = u * axis_body where u is scalar, and each axis of
-    axis_body must satisfy |u * axis_body[i]| <= TORQUE[i], then:
-        |u| <= min_i (TORQUE[i] / |axis_body[i]|)  for non-zero components
+    Time-optimal 1D control with discrete-step compensation and
+    a critically damped boundary layer to eliminate chattering.
     """
-    limits = np.full(3, np.inf)
-    for i in range(3):
-        if abs(axis_body[i]) > 1e-9:
-            limits[i] = TORQUE[i] / abs(axis_body[i])
-    return float(np.min(limits))
+    eff_accel = (torque + damping * abs(vel)) * TORQUE_APPLY_SCALE
+
+    # Wrap error to [-pi, pi]
+    err = (err + pi) % (2.0 * pi) - pi
+
+    # Wrap-around check: If moving fast away from target, wrapping around 2pi is faster
+    if vel > 2.5 and err < -1.2:
+        err += 2.0 * pi
+    elif vel < -2.5 and err > 1.2:
+        err -= 2.0 * pi
+
+    # Boundary layer thickness (distance covered in ~2.5 ticks of deceleration)
+    # Inside this layer, we switch from sqrt() profile to linear critical damping
+    e_bl = 0.5 * eff_accel * (2.5 * SIM_DT) ** 2
+
+    # Target velocity generation
+    if abs(err) <= e_bl:
+        # Critically damped linear region: v_target proportional to error
+        v_target = (err / (2.5 * SIM_DT))
+    else:
+        # Time-optimal sqrt deceleration curve with discrete half-step offset
+        sign = 1.0 if err > 0 else -1.0
+        # Offset by e_bl so sqrt matches the linear slope continuously at the boundary
+        v_target = sign * sqrt(2.0 * eff_accel * (abs(err) - 0.5 * e_bl))
+
+    # Clamp target velocity to max speed ceiling
+    v_target = float(np.clip(v_target, -v_max, v_max))
+
+    # High-gain tracking of the target velocity profile
+    # Commands max acceleration |u| = 1.0 until vel matches v_target
+    u = (v_target - vel) / (eff_accel * SIM_DT)
+    return float(np.clip(u, -1.0, 1.0))
 
 
-def solve_roundy(car: Car, target_rot):
-    # --- 1. Geodesic error in the inertial frame ---
-    err_axis_world, theta = _geodesic_error(car.rot, target_rot)
-    if theta < 1e-6:
-        return CarControls(0.0, 0.0, 0.0)
+def run_rm_vector_field(car: Car, target_rot):
+    q_rel, local_ang_vel = _get_control_frame(car.rot, target_rot, car.ang_vel)
 
-    # --- 2. Decompose angular velocity into along / perpendicular ---
-    #    ω is in body frame; err_axis is in world frame.
-    #    Rotate err_axis into body frame: R_body = car.rot^{-1} applied to world vector
-    inv_rot = np.array([-car.rot[0], -car.rot[1], -car.rot[2], car.rot[3]])
-    err_axis_body = qrot(inv_rot, np.array([0.0, 0.0, 0.0, 0.0]) +
-                         np.concatenate([err_axis_world, [0.0]]))[:3]
-    err_axis_body /= (np.linalg.norm(err_axis_body) + 1e-12)
+    v_norm = sqrt(q_rel[0]**2 + q_rel[1]**2 + q_rel[2]**2)
+    if v_norm < 1e-6:
+        err_pyr = np.zeros(3)
+    else:
+        angle = 2.0 * np.arctan2(v_norm, q_rel[3])
+        err_pyr = (angle / v_norm) * q_rel[:3]
 
-    v_along = float(np.dot(car.ang_vel, err_axis_body))
-    v_perp = car.ang_vel - v_along * err_axis_body
+    pitch_err, yaw_err, roll_err = err_pyr[0], err_pyr[1], err_pyr[2]
+    pitch_vel, yaw_vel, roll_vel = local_ang_vel[0], local_ang_vel[1], local_ang_vel[2]
 
-    # --- 3. 1D kinematic solve for the along-geodesic component ---
-    #    Effective torque along err_axis_body (accounts for per-axis limits)
-    tau_along_max = _body_torque_limit_along(err_axis_body)
-    #    Damping along this direction
-    damp_along = float(np.dot(DAMPING, err_axis_body * err_axis_body))  # quadratic form approx
+    # Dynamically allocate velocity headroom on the 5.5 rad/s sphere
+    pitch_in = _smooth_bang_coast_brake(pitch_err, pitch_vel, TORQUE[0], 0.0, MAX_ANG_SPEED)
+    yaw_in   = _smooth_bang_coast_brake(yaw_err,   yaw_vel,   TORQUE[1], 0.0, MAX_ANG_SPEED)
 
-    u_along = _kinematic_solve_1d(theta, v_along, tau_along_max, damp_along)
+    # Allow roll to run at full speed, capped dynamically by pitch/yaw speed consumption
+    py_spd_sq = pitch_vel**2 + yaw_vel**2
+    roll_spd_limit = MAX_ANG_SPEED if py_spd_sq >= MAX_ANG_SPEED**2 else sqrt(MAX_ANG_SPEED**2 - py_spd_sq)
+    roll_spd_limit = max(0.5, roll_spd_limit)
 
-    # --- 4. Steering: kill perpendicular velocity ---
-    #    We want to apply torque opposite to v_perp to curve the velocity
-    #    back onto the geodesic.  Gain is tuned so that steering doesn't
-    #    steal too much budget from the along-axis braking.
-    #
-    #    Key insight: if |v_perp| is large relative to v_along, we're "wasting"
-    #    speed budget.  Prioritize steering.  If v_perp is small, prioritize
-    #    the along-axis kinematic solve.
-    v_perp_mag = np.linalg.norm(v_perp)
-    v_total = np.linalg.norm(car.ang_vel)
-    #    Steering gain: proportional to how much of the speed is "sideways"
-    steer_gain = 2.0 / max(tau_along_max, 1e-6)  # 1/accel gives time constant
-    u_perp_body = -v_perp * steer_gain
+    roll_in = _smooth_bang_coast_brake(roll_err, roll_vel, TORQUE[2], DAMPING[2], roll_spd_limit)
 
-    # --- 5. Combine in body frame ---
-    u_body = u_along * err_axis_body + u_perp_body
+    return CarControls(pitch=pitch_in, yaw=yaw_in, roll=roll_in)
 
-    # --- 6. Saturate per-axis (this is the real constraint) ---
-    #    Scale down if any axis would exceed ±1
-    max_comp = np.max(np.abs(u_body))
-    if max_comp > 1.0:
-        u_body /= max_comp
 
-    return CarControls(
-        pitch=float(np.clip(u_body[0], -1, 1)),
-        yaw=float(np.clip(u_body[1], -1, 1)),
-        roll=float(np.clip(u_body[2], -1, 1)),
-    )
+def solve_roundy(q0, w0, target_rot, tol_angle=0.05, tol_speed=0.07, max_seconds=6.0):
+    car = Car(rot=q0.copy(), ang_vel=w0.copy())
+    hist = []
+    max_ticks = int(max_seconds * SIM_FPS)
+    settled = False
+    t_finish = max_seconds
+
+    for tick in range(max_ticks):
+        sim_time = tick * SIM_DT
+        inner = min(1.0, max(-1.0, abs(float(np.dot(car.rot, target_rot)))))
+        angle_rad = 2.0 * np.arccos(inner)
+        spd = float(np.linalg.norm(car.ang_vel))
+
+        if not settled and angle_rad < tol_angle and spd < tol_speed:
+            settled = True
+            t_finish = sim_time
+
+        ctrl = run_rm_vector_field(car, target_rot) if not settled else CarControls(0.0, 0.0, 0.0)
+        status = "SETTLED" if settled else "ACTIVE"
+        hist.append({
+            "rot": car.rot.copy(),
+            "u": np.array([ctrl.pitch, ctrl.yaw, ctrl.roll]),
+            "t": sim_time,
+            "angle_rad": angle_rad,
+            "speed": spd,
+            "status": status
+        })
+
+        if not settled:
+            car.step_turn(ctrl, SIM_DT)
+        elif tick > int(t_finish / SIM_DT) + 25:
+            break
+
+    return t_finish, hist

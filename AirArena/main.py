@@ -14,20 +14,28 @@ from solver_casadi import solve_casadi
 from solver_kinematic import solve_kinematic
 from solver_penguin import solve_penguin
 from solver_roundy import solve_roundy
+from solver_btt import solve_btt
+from solver_2DAVF import solve_dir2d
+from solver_S2xS1 import solve_s2s1
 
 # ─── Configuration ────────────────────────────────────────────────────────────
-N_SAMPLES = 100
+N_SAMPLES = 820
+START_SAMPLE = 819
 TOL_ANGLE = 0.05
 TOL_SPEED = 0.07
 OUTPUT_DIR = "renders"
-SAVE_ALL_GIFS = True
+SAVE_ALL_GIFS = False
 CACHE_FILE = "benchmark_cache.pkl"
 
 ACTIVE_SOLVERS = {
-    "CasADi": {"fn": solve_casadi, "color": "#00D2FF"},
-    "Roundy": {"fn": solve_roundy, "color": "#66fc25"},
-    "RM_Kinematic": {"fn": solve_kinematic, "color": "#FF7B00"},
-    "PenguinBot": {"fn": solve_penguin, "color": "#B05CFF"},
+    # "CasADi":     {"fn": solve_casadi,    "color": "#00D2FF"},
+    #"Roundy":     {"fn": solve_roundy,    "color": "#66fc25", "force": True},
+    "RM_Kinematic": {"fn": solve_kinematic, "color": "#FF7B00", "force": False},
+    #"PenguinBot": {"fn": solve_penguin,   "color": "#B05CFF"},
+    "BTT": {"fn": solve_btt, "color": "#44fc9d"},
+    "2D_AVF": {"fn": solve_dir2d, "color": "#44fced"},
+    "S2xS1": {"fn": solve_s2s1, "color": "#4497fc"},
+
 }
 
 # 3D Chassis wireframe edges
@@ -190,10 +198,8 @@ def _cache_is_valid(cache: dict) -> bool:
     if meta is None:
         return False
     return (
-            meta.get("n_samples") == N_SAMPLES
-            and meta.get("tol_angle") == TOL_ANGLE
+            meta.get("tol_angle") == TOL_ANGLE
             and meta.get("tol_speed") == TOL_SPEED
-            and meta.get("solvers") == list(ACTIVE_SOLVERS.keys())
     )
 
 
@@ -228,7 +234,7 @@ def main():
         print("[cache] Configuration changed – cache invalidated, starting fresh.")
         cache = {}
     cache.setdefault("meta", {
-        "seed": _SEED, "n_samples": N_SAMPLES,
+        "n_samples": N_SAMPLES,
         "tol_angle": TOL_ANGLE, "tol_speed": TOL_SPEED,
         "solvers": list(ACTIVE_SOLVERS.keys()),
     })
@@ -250,76 +256,93 @@ def main():
     print(header)
     print("-" * len(header))
 
-    for i in range(N_SAMPLES):
-        # ← cache: skip if this run is already fully cached
+    for i in range(START_SAMPLE, N_SAMPLES):
         cached_run = cache["runs"].get(i)
-        if cached_run and all(name in cached_run["results"] for name in ACTIVE_SOLVERS):
+
+        # Decide which solvers must (re)run:
+        #   • not present in cache, OR
+        #   • flagged with "force": True in ACTIVE_SOLVERS
+        needs_run = {
+            name
+            for name, cfg in ACTIVE_SOLVERS.items()
+            if cfg.get("force", False)
+               or cached_run is None
+               or name not in cached_run["results"]
+        }
+
+        # ── Fast path: nothing to do ──────────────────────────────────
+        if not needs_run:
             q0, w0 = cached_run["q0"], cached_run["w0"]
-            histories = {}
-            run_times = {}
+            histories, run_times = {}, {}
             for name in ACTIVE_SOLVERS:
                 r = cached_run["results"][name]
                 completion_times[name].append(r["t_finish"])
                 compute_times[name].append(r["compute_time"])
                 run_times[name] = r["t_finish"]
-                histories[name] = {"hist": r["hist"], "color": ACTIVE_SOLVERS[name]["color"], "t_settle": r["t_finish"]}
+                histories[name] = {"hist": r["hist"],
+                                   "color": ACTIVE_SOLVERS[name]["color"],
+                                   "t_settle": r["t_finish"]}
 
-            fastest_solver = min(run_times, key=run_times.get)
-            sorted_times = sorted(run_times.values())
-            lead = sorted_times[1] - sorted_times[0] if len(sorted_times) > 1 else 0.0
-            times_str = " | ".join([f"{run_times[n]:>{col_width-2}.4f} s" for n in solver_names])
-            print(f"{i+1:<5} | {times_str} | {fastest_solver} (+{lead*SIM_FPS:.1f}f)  [cached]")
+            fastest = min(run_times, key=run_times.get)
+            st = sorted(run_times.values())
+            lead = st[1] - st[0] if len(st) > 1 else 0.0
+            ts = " | ".join(f"{run_times[n]:>{col_width - 2}.4f} s" for n in solver_names)
+            print(f"{i + 1:<5} | {ts} | {fastest} (+{lead * SIM_FPS:.1f}f)  [cached]")
 
             if SAVE_ALL_GIFS:
-                gif_path = os.path.join(OUTPUT_DIR, f"run_{i+1:03d}.gif")
-                render_comparison_animation(histories, filename=gif_path)
+                render_comparison_animation(histories,
+                                            os.path.join(OUTPUT_DIR, f"run_{i + 1:03d}.gif"))
             continue
 
-        # ← not cached: run fresh
-        q0, w0 = random_state()
-        histories = {}
-        run_times = {}
+        # ── Partial / full re-run ─────────────────────────────────────
+        # q0, w0 come from the cache when available (deterministic seed
+        # means they'd be identical either way, but this avoids calling
+        # random_state() and keeps the stream aligned).
+        if cached_run is not None:
+            q0, w0 = cached_run["q0"], cached_run["w0"]
+        else:
+            q0, w0 = random_state()
 
-        for name, config in ACTIVE_SOLVERS.items():
-            t_wall_start = time.perf_counter()
-            t_finish, hist = config["fn"](q0, w0, target_rot,
-                                          tol_angle=TOL_ANGLE,
-                                          tol_speed=TOL_SPEED)
-            t_wall_end = time.perf_counter()
+        histories, run_times = {}, {}
 
-            completion_times[name].append(t_finish)
-            compute_times[name].append(t_wall_end - t_wall_start)
+        for name, cfg in ACTIVE_SOLVERS.items():
+            if name in needs_run:
+                t0 = time.perf_counter()
+                t_finish, hist = cfg["fn"](q0, w0, target_rot,
+                                           tol_angle=TOL_ANGLE,
+                                           tol_speed=TOL_SPEED)
+                comp_time = time.perf_counter() - t0
+            else:
+                r = cached_run["results"][name]
+                t_finish, hist, comp_time = r["t_finish"], r["hist"], r["compute_time"]
+
             run_times[name] = t_finish
-            histories[name] = {
-                "hist": hist,
-                "color": config["color"],
-                "t_settle": t_finish
-            }
+            histories[name] = {"hist": hist, "color": cfg["color"], "t_settle": t_finish}
+            completion_times[name].append(t_finish)
+            compute_times[name].append(comp_time)
 
-        # ← cache: store this run
-        cache["runs"][i] = {
-            "q0": q0,
-            "w0": w0,
-            "results": {
-                name: {
-                    "t_finish": run_times[name],
-                    "hist": histories[name]["hist"],
-                    "compute_time": compute_times[name][-1],
-                }
-                for name in ACTIVE_SOLVERS
-            },
-        }
+        # Merge fresh results into the cache entry (overwrites forced solvers,
+        # keeps any previously-cached solvers that weren't re-run).
+        if cached_run is None:
+            cache["runs"][i] = {"q0": q0, "w0": w0, "results": {}}
+        for name in needs_run:
+            cache["runs"][i]["results"][name] = {
+                "t_finish": run_times[name],
+                "hist": histories[name]["hist"],
+                "compute_time": compute_times[name][-1],
+            }
         _save_cache(CACHE_FILE, cache)
 
-        fastest_solver = min(run_times, key=run_times.get)
-        sorted_times = sorted(run_times.values())
-        lead = sorted_times[1] - sorted_times[0] if len(sorted_times) > 1 else 0.0
-        times_str = " | ".join([f"{run_times[n]:>{col_width-2}.4f} s" for n in solver_names])
-        print(f"{i+1:<5} | {times_str} | {fastest_solver} (+{lead*SIM_FPS:.1f}f)")
+        fastest = min(run_times, key=run_times.get)
+        st = sorted(run_times.values())
+        lead = st[1] - st[0] if len(st) > 1 else 0.0
+        ts = " | ".join(f"{run_times[n]:>{col_width - 2}.4f} s" for n in solver_names)
+        forced_tag = f"  [re-ran: {', '.join(sorted(needs_run))}]" if needs_run else ""
+        print(f"{i + 1:<5} | {ts} | {fastest} (+{lead * SIM_FPS:.1f}f){forced_tag}")
 
         if SAVE_ALL_GIFS:
-            gif_path = os.path.join(OUTPUT_DIR, f"run_{i+1:03d}.gif")
-            render_comparison_animation(histories, filename=gif_path)
+            render_comparison_animation(histories,
+                                        os.path.join(OUTPUT_DIR, f"run_{i + 1:03d}.gif"))
 
     # ─── Solution Quality Summary ────────────────────────────────
     print("\n" + "=" * 75)
