@@ -17,10 +17,11 @@ from solver_roundy import solve_roundy
 from solver_btt import solve_btt
 from solver_2DAVF import solve_dir2d
 from solver_S2xS1 import solve_s2s1
+from solver_casadi_fast import solve_casadi_fast
 
 # ─── Configuration ────────────────────────────────────────────────────────────
-N_SAMPLES = 820
-START_SAMPLE = 819
+N_SAMPLES = 125
+START_SAMPLE = 0
 TOL_ANGLE = 0.05
 TOL_SPEED = 0.07
 OUTPUT_DIR = "renders"
@@ -28,14 +29,14 @@ SAVE_ALL_GIFS = False
 CACHE_FILE = "benchmark_cache.pkl"
 
 ACTIVE_SOLVERS = {
-    # "CasADi":     {"fn": solve_casadi,    "color": "#00D2FF"},
+    "CasADi":     {"fn": solve_casadi,    "color": "#00D2FF", "force": False},
+    "CasADi_Fast": {"fn": solve_casadi_fast, "color": "#FFD200", "force": False},
     #"Roundy":     {"fn": solve_roundy,    "color": "#66fc25", "force": True},
     "RM_Kinematic": {"fn": solve_kinematic, "color": "#FF7B00", "force": False},
     #"PenguinBot": {"fn": solve_penguin,   "color": "#B05CFF"},
-    "BTT": {"fn": solve_btt, "color": "#44fc9d"},
-    "2D_AVF": {"fn": solve_dir2d, "color": "#44fced"},
-    "S2xS1": {"fn": solve_s2s1, "color": "#4497fc"},
-
+    #"BTT": {"fn": solve_btt, "color": "#44fc9d"},
+    "2D_AVF": {"fn": solve_dir2d, "color": "#44fced", "force": False},
+    #"S2xS1": {"fn": solve_s2s1, "color": "#4497fc"},
 }
 
 # 3D Chassis wireframe edges
@@ -357,17 +358,6 @@ def main():
         print(
             f"#{rank} {name:<19} | {np.mean(times):>8.4f} s | {np.median(times):>10.4f} s | {np.min(times):>8.4f} s | {np.max(times):>8.4f} s")
     print("-" * 75)
-
-    # Pairwise lead matrix
-    print("\nPairwise Comparisons (Average Frame Advantage @ 120 FPS):")
-    for s1 in ranked_solvers:
-        for s2 in ranked_solvers:
-            if s1 != s2:
-                diff_frames = (np.array(completion_times[s2]) - np.array(completion_times[s1])) * SIM_FPS
-                if np.mean(diff_frames) > 0:
-                    print(
-                        f"  • {s1} is faster than {s2} by {np.mean(diff_frames):>+5.1f} frames avg (+{np.mean(diff_frames) / SIM_FPS:.4f} s)")
-    print("=" * 75)
 
     # ─── Computation Time Summary ──────────────────────────────────────
     print("\n" + "=" * 75)
