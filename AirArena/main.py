@@ -18,25 +18,27 @@ from solver_btt import solve_btt
 from solver_2DAVF import solve_dir2d
 from solver_S2xS1 import solve_s2s1
 from solver_casadi_fast import solve_casadi_fast
+from solver_nn import solve_neural
 
 # ─── Configuration ────────────────────────────────────────────────────────────
-N_SAMPLES = 125
+N_SAMPLES = 20
 START_SAMPLE = 0
 TOL_ANGLE = 0.05
 TOL_SPEED = 0.07
 OUTPUT_DIR = "renders"
-SAVE_ALL_GIFS = False
+SAVE_ALL_GIFS = True
 CACHE_FILE = "benchmark_cache.pkl"
 
 ACTIVE_SOLVERS = {
-    "CasADi":     {"fn": solve_casadi,    "color": "#00D2FF", "force": False},
-    "CasADi_Fast": {"fn": solve_casadi_fast, "color": "#FFD200", "force": False},
+    #"CasADi":     {"fn": solve_casadi,    "color": "#00D2FF", "force": False},
+    "CasADi_Fast": {"fn": solve_casadi_fast, "color": "#FFD200", "force": True},
     #"Roundy":     {"fn": solve_roundy,    "color": "#66fc25", "force": True},
-    "RM_Kinematic": {"fn": solve_kinematic, "color": "#FF7B00", "force": False},
+    #"RM_Kinematic": {"fn": solve_kinematic, "color": "#FF7B00", "force": False},
     #"PenguinBot": {"fn": solve_penguin,   "color": "#B05CFF"},
     #"BTT": {"fn": solve_btt, "color": "#44fc9d"},
-    "2D_AVF": {"fn": solve_dir2d, "color": "#44fced", "force": False},
+    #"2D_AVF": {"fn": solve_dir2d, "color": "#44fced", "force": False},
     #"S2xS1": {"fn": solve_s2s1, "color": "#4497fc"},
+    "NN": {"fn": solve_neural, "color": "#EEEEEE", "force": True},
 }
 
 # 3D Chassis wireframe edges
