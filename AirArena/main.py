@@ -19,6 +19,7 @@ from solver_2DAVF import solve_dir2d
 from solver_S2xS1 import solve_s2s1
 from solver_casadi_fast import solve_casadi_fast
 from solver_nn import solve_neural
+# from solver_rlutilities import solve_rlutilities
 
 # ─── Configuration ────────────────────────────────────────────────────────────
 N_SAMPLES = 20
@@ -31,7 +32,7 @@ CACHE_FILE = "benchmark_cache.pkl"
 
 ACTIVE_SOLVERS = {
     #"CasADi":     {"fn": solve_casadi,    "color": "#00D2FF", "force": False},
-    "CasADi_Fast": {"fn": solve_casadi_fast, "color": "#FFD200", "force": True},
+    "CasADi_Fast": {"fn": solve_casadi_fast, "color": "#FFD200", "force": False},
     #"Roundy":     {"fn": solve_roundy,    "color": "#66fc25", "force": True},
     #"RM_Kinematic": {"fn": solve_kinematic, "color": "#FF7B00", "force": False},
     #"PenguinBot": {"fn": solve_penguin,   "color": "#B05CFF"},
@@ -39,6 +40,7 @@ ACTIVE_SOLVERS = {
     #"2D_AVF": {"fn": solve_dir2d, "color": "#44fced", "force": False},
     #"S2xS1": {"fn": solve_s2s1, "color": "#4497fc"},
     "NN": {"fn": solve_neural, "color": "#EEEEEE", "force": True},
+    # "Reorient_ML": {"fn": solve_rlutilities, "color": "#b667ef", "force": True}
 }
 
 # 3D Chassis wireframe edges

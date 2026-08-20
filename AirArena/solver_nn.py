@@ -1,15 +1,15 @@
 """
-solver_neural.py - Ultra-fast distilled neural controller.
+solver_neural.py - Evaluates the trained ZeroBiasPolicy.
 """
 import torch
 import numpy as np
 from simulator import (
     BASIS_QUAT, qmul, qrot, Car, CarControls, SIM_FPS, SIM_DT
 )
-from policy_training import SatellitePolicy
+from policy_training import ZeroBiasPolicy
 
-# Load the trained model once at startup
-_policy = SatellitePolicy()
+# Load model onto CPU
+_policy = ZeroBiasPolicy()
 _policy.load_state_dict(torch.load("satellite_policy.pth", map_location="cpu"))
 _policy.eval()
 
@@ -25,18 +25,17 @@ def run_neural_controller(car: Car, target_rot):
     if q_rel[3] < 0:
         q_rel = -q_rel
 
-    # Local angular velocity
     w_local = qrot(inv_curr, car.ang_vel)
 
-    # 2. Pack 7-element state vector
-    state = torch.tensor(
-        [q_rel[0], q_rel[1], q_rel[2], q_rel[3], w_local[0], w_local[1], w_local[2]],
+    # 2. 6D Zero-Centered Vector [qx, qy, qz, wx, wy, wz]
+    state_6d = torch.tensor(
+        [q_rel[0], q_rel[1], q_rel[2], w_local[0], w_local[1], w_local[2]],
         dtype=torch.float32
     )
 
-    # 3. Neural inference (< 5 microseconds)
+    # 3. Direct evaluation
     with torch.no_grad():
-        u = _policy(state).numpy()
+        u = _policy(state_6d).numpy()
 
     return CarControls(pitch=float(u[0]), yaw=float(u[1]), roll=float(u[2]))
 
